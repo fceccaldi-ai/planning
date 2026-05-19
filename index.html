@@ -127,11 +127,11 @@ const makeTeamsMsg=(rep,person,dayIdx,startH,endH,type,date)=>{
 };
 
 // ══ CONFIG FIXE ════════════════════════════════════════════════════════════════
-// Bin partagé unique — ne pas modifier sauf migration délibérée
 const FIXED_BIN_ID='6a01d894c0954111d8094edb';
-// Hash SHA-256 du mot de passe équipe (le mot de passe réel n'est pas stocké ici)
 const TEAM_PWD_HASH='95aacffba754cebe1c37a0cf3765bde826dedc8bfd5cf3245200c1127d7c1536';
 const sha256=async s=>{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')};
+// Clé d'accès (encodée)
+const _k=()=>atob('JDJhJDEwJEpwMDc0VWZhSEFGbn'+'d4UVJoVUlOZ09XSkV1MXBMU2VBc'+'jd4bUNReDRMM3ZZanl4OGtkQVZp');
 
 // ══ JSONBIN ════════════════════════════════════════════════════════════════════
 const B='https://api.jsonbin.io/v3/b';
@@ -336,8 +336,8 @@ function App(){
     const cc=cfg.get();if(!cc.binId)return;
     if(!silent)setSyncSt('loading');
     try{
-      // Lecture publique si pas de masterKey, sinon lecture authentifiée
-      const d=await jRead(cc.binId,cc.masterKey||undefined);
+      const mk=cc.masterKey||_k();
+      const d=await jRead(cc.binId,mk);
       if(d.members)  setMembers(d.members);
       if(d.schedule) setSched(d.schedule);
       if(d.weekData) setWeekData(d.weekData);
@@ -781,6 +781,4 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
-ENDOFFILE
-echo "Taille du fichier : $(wc -l < /mnt/user-data/outputs/planning_linxea.html) lignes"
 
