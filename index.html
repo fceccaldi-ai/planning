@@ -129,6 +129,7 @@ const makeTeamsMsg=(rep,person,dayIdx,startH,endH,type,date)=>{
 // ══ CONFIG FIXE ════════════════════════════════════════════════════════════════
 const FIXED_BIN_ID='6a01d894c0954111d8094edb';
 const TEAM_PWD_HASH='95aacffba754cebe1c37a0cf3765bde826dedc8bfd5cf3245200c1127d7c1536';
+const ADMIN_PIN_HASH='09550794019a7c2092e5872e26a4cd2155868b8c427adb53734c8a9d4ea343d7';
 const sha256=async s=>{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')};
 // Clé d'accès (encodée)
 const _k=()=>atob('JDJhJDEwJEpwMDc0VWZhSEFGbn'+'d4UVJoVUlOZ09XSkV1MXBMU2VBc'+'jd4bUNReDRMM3ZZanl4OGtkQVZp');
@@ -260,37 +261,29 @@ function AccessGate({onUnlock}){
 // ══ COMPOSANT : Modal PIN ══════════════════════════════════════════════════════
 function PinModal({onClose,onSuccess}){
   const[pin, setPin]=useState('');
-  const[mkey,setMkey]=useState('');
   const[err, setErr]=useState('');
   const[busy,setBusy]=useState(false);
-  const c=cfg.get();
-  const needKey=!c.masterKey;
   const go=async()=>{
-    if(pin!==c.pin){setErr('Code PIN incorrect');setTimeout(()=>setErr(''),1500);return}
-    if(needKey){
-      if(!mkey.trim()){setErr('Entrez votre Master Key');return}
-      setBusy(true);
-      try{await jRead(c.binId,mkey.trim());cfg.set({...c,masterKey:mkey.trim()});onSuccess()}
-      catch{setErr('Master Key incorrecte')}
-      setBusy(false);
-    }else onSuccess();
+    if(!pin){setErr('Entrez le code PIN');return}
+    setBusy(true);setErr('');
+    const h=await sha256(pin);
+    if(h===ADMIN_PIN_HASH){
+      cfg.set({...cfg.get(),masterKey:_k()});
+      onSuccess();
+    }else{
+      setErr('Code PIN incorrect');
+    }
+    setBusy(false);
   };
   return(<>
     <div className="ov" onClick={onClose}/>
-    <div className="mb" style={{width:'min(340px,94vw)',background:'white',border:'1px solid #e2e8f0',padding:'28px 24px',textAlign:'center'}}>
+    <div className="mb" style={{width:'min(320px,94vw)',background:'white',border:'1px solid #e2e8f0',padding:'28px 24px',textAlign:'center'}}>
       <div style={{fontSize:'28px',marginBottom:'8px'}}>🔐</div>
       <div style={{fontSize:'15px',fontWeight:'700',color:'#0f172a',marginBottom:'4px'}}>Mode édition</div>
-      <div style={{fontSize:'12px',color:'#94a3b8',marginBottom:'18px',lineHeight:'1.6'}}>{needKey?'Saisissez votre Master Key et votre code PIN.':'Saisissez votre code PIN pour modifier le planning.'}</div>
-      {needKey&&<div style={{marginBottom:'12px',textAlign:'left'}}>
-        <div className="lbl">Master Key JSONbin</div>
-        <input type="password" style={{width:'100%',fontFamily:'monospace',fontSize:'11px'}} placeholder="$2a$10$…" value={mkey} onChange={e=>setMkey(e.target.value)}/>
-      </div>}
-      <div style={{textAlign:'left',marginBottom:'14px'}}>
-        <div className="lbl">Code PIN</div>
-        <input type="password" autoFocus style={{width:'100%',fontFamily:'monospace',fontSize:'22px',textAlign:'center',letterSpacing:'10px',borderRadius:'9px',padding:'11px',border:`2px solid ${err?'#ef4444':'#e2e8f0'}`,animation:err?'shake .3s ease':''}} placeholder="••••" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()}/>
-      </div>
-      {err&&<div style={{fontSize:'12px',color:'#dc2626',marginBottom:'10px'}}>{err}</div>}
-      <button className="btn" onClick={go} disabled={busy} style={{width:'100%',padding:'11px',borderRadius:'9px',background:'#4f46e5',color:'white',fontSize:'14px',fontWeight:'600',marginBottom:'8px'}}>{busy?'Vérification…':'Confirmer →'}</button>
+      <div style={{fontSize:'12px',color:'#94a3b8',marginBottom:'18px',lineHeight:'1.6'}}>Entrez le code PIN administrateur</div>
+      <input type="password" autoFocus maxLength={8} style={{width:'140px',fontSize:'24px',fontFamily:'monospace',textAlign:'center',letterSpacing:'8px',padding:'10px',borderRadius:'8px',border:`2px solid ${err?'#ef4444':'#e2e8f0'}`,marginBottom:'12px'}} placeholder="••••" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()}/>
+      {err&&<div style={{fontSize:'12px',color:'#dc2626',marginBottom:'10px'}}>⚠️ {err}</div>}
+      <button className="btn" onClick={go} disabled={busy} style={{width:'100%',padding:'11px',borderRadius:'9px',background:'#4f46e5',color:'white',fontSize:'14px',fontWeight:'600',marginBottom:'8px'}}>{busy?'Vérification…':'Accéder en mode admin →'}</button>
       <button className="btn" onClick={onClose} style={{width:'100%',padding:'9px',borderRadius:'9px',background:'#f8fafc',color:'#64748b',border:'1px solid #e2e8f0',fontSize:'13px'}}>Annuler</button>
     </div>
   </>);
@@ -347,9 +340,10 @@ function App(){
   },[toast_]);
 
   const saveData=useCallback(async data=>{
-    const cc=cfg.get();if(!cc.binId||!cc.masterKey)return;
+    const cc=cfg.get();if(!cc.binId)return;
+    const mk=cc.masterKey||_k();
     setSyncSt('saving');
-    try{await jWrite(cc.binId,cc.masterKey,data);setSyncSt('ok');setLastSync(new Date())}
+    try{await jWrite(cc.binId,mk,data);setSyncSt('ok');setLastSync(new Date())}
     catch{setSyncSt('error');toast_('❌ Sauvegarde échouée')}
   },[toast_]);
 
@@ -422,12 +416,12 @@ function App(){
     return cands.sort((a,b)=>{const ca=rs[a]?.count||0,cb=rs[b]?.count||0;return ca!==cb?ca-cb:(rs[a]?.last||0)-(rs[b]?.last||0)});
   };
 
-  // ── Notification : ICS + message Teams ──
+  // ── Notification : @mention Teams uniquement ──
   const notif=(slot,repName,startH,endH)=>{
     const sh=startH??slot.startH,eh=endH??slot.endH,date=wDates[slot.day];
-    dlICS(makeICS(slot.person,slot.type,sh,eh,date),`phoning_${repName.replace(/\s/g,'_')}`);
-    navigator.clipboard?.writeText(makeTeamsMsg(repName,slot.person,slot.day,sh,eh,slot.type,date));
-    toast_('📅 Invitation téléchargée · 📋 Message Teams copié — collez-le dans votre canal',5000);
+    const msg=makeTeamsMsg(repName,slot.person,slot.day,sh,eh,slot.type,date);
+    navigator.clipboard?.writeText(msg);
+    toast_('📋 @mention Teams copiée — collez-la dans votre canal Teams',4000);
   };
 
   // ── Gestion créneaux ──
@@ -623,7 +617,7 @@ function App(){
                       })}
                       <div style={{position:'absolute',top:'5px',right:'8px',width:'5px',height:'5px',borderRadius:'50%',background:isR?'#3b82f6':'#f59e0b',opacity:.7}}/>
                       <div style={{fontSize:'11px',fontWeight:'700',lineHeight:'1.3',color:absent?'#dc2626':mc,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{absent?'✕ ':''}{slot.person}</div>
-                      {rep&&<div style={{fontSize:'10px',fontWeight:'600',lineHeight:'1.2',marginTop:'1px',color:mCol(rep),whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>↪ {rep}</div>}
+                      {rep&&<div style={{fontSize:'11px',fontWeight:'800',lineHeight:'1.3',marginTop:'2px',color:'white',background:mCol(rep),borderRadius:'4px',padding:'1px 5px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',display:'inline-block',maxWidth:'100%'}}>↪ {rep}</div>}
                       <div style={{fontSize:'9px',color:'#94a3b8',fontFamily:"'DM Mono',monospace",lineHeight:'1.3',marginTop:'2px'}}>{slot.display||`${tFmt(slot.startH)}–${tFmt(slot.endH)}`}</div>
                       {slot.note&&slot.height>46&&<div style={{fontSize:'8.5px',color:'#94a3b8',marginTop:'1px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📅 {slot.note}</div>}
                       {brks.length>0&&<div style={{fontSize:'8.5px',color:'#ea580c',marginTop:'1px',fontWeight:'600'}}>🔔 {brks.length} pause{brks.length>1?'s':''}</div>}
@@ -685,7 +679,7 @@ function App(){
                 <div style={{width:'30px',height:'30px',borderRadius:'50%',background:mCol(rep),display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:'700',color:'white',flexShrink:0}}>{rep[0]}</div>
                 <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:'700',color:'#15803d'}}>{rep}</div><div style={{fontSize:'11px',color:'#86efac'}}>remplace <span style={{textDecoration:'line-through',color:'#94a3b8'}}>{mSlot.person}</span></div></div>
                 <div style={{display:'flex',gap:'5px'}}>
-                  <button className="btn" onClick={()=>notif(mSlot,rep,null,null)} style={{fontSize:'11px',padding:'5px 9px',borderRadius:'6px',fontWeight:'600',background:'#eff6ff',color:'#2563eb',border:'1px solid #bfdbfe'}}>📅 ICS + Teams</button>
+                  <button className="btn" onClick={()=>notif(mSlot,rep,null,null)} style={{fontSize:'11px',padding:'5px 9px',borderRadius:'6px',fontWeight:'600',background:'#eff6ff',color:'#2563eb',border:'1px solid #bfdbfe'}}>📋 @mention Teams</button>
                   <button className="btn" onClick={()=>removeRep(mSlot.id)} style={{fontSize:'11px',padding:'5px 9px',borderRadius:'6px',background:'white',border:'1px solid #e2e8f0',color:'#94a3b8'}}>Changer</button>
                 </div>
               </div>)}
@@ -739,7 +733,7 @@ function App(){
                   <span style={{fontSize:'12px',color:'#334155',flex:1}}>↪ <strong>{brk.rep}</strong></span>
                   <button className="btn" onClick={()=>notif(mSlot,brk.rep,brk.startH,brk.endH)}
                     style={{fontSize:'10px',padding:'3px 8px',borderRadius:'5px',background:'#eff6ff',color:'#2563eb',border:'1px solid #bfdbfe'}}>
-                    📅 ICS + Teams
+                    📋 @mention Teams
                   </button>
                   <button className="btn" onClick={()=>removeBreak(mSlot.id,brk.id)}
                     style={{fontSize:'10px',padding:'3px 7px',borderRadius:'5px',background:'#fff5f5',color:'#dc2626',border:'1px solid #fecaca'}}>✕</button>
@@ -781,4 +775,3 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
-
