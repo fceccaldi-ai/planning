@@ -347,20 +347,23 @@ function App(){
     catch{setSyncSt('error');toast_('❌ Sauvegarde échouée')}
   },[toast_]);
 
-  const schedSave=useCallback(data=>{
+  const schedSave=useCallback(()=>{
     if(saveRef.current)clearTimeout(saveRef.current);
-    saveRef.current=setTimeout(()=>saveData(data),1500);
+    // Lit dataRef.current AU MOMENT de la sauvegarde (pas au moment de l'appel)
+    // → garantit que TOUS les états mis à jour sont inclus, même si plusieurs
+    //   mises à jour s'enchaînent rapidement (ex: absent + remplaçant)
+    saveRef.current=setTimeout(()=>saveData(dataRef.current),1500);
   },[saveData]);
 
   useEffect(()=>{if(ready)loadData()},[ready]);
-  useEffect(()=>{const id=setInterval(()=>{if(!isAdmin)loadData(true)},120000);return()=>clearInterval(id)},[isAdmin,loadData]);
+  useEffect(()=>{const id=setInterval(()=>{if(!isAdmin&&!saveRef.current)loadData(true)},120000);return()=>clearInterval(id)},[isAdmin,loadData]);
   const lastFocRef=useRef(0);
   useEffect(()=>{
-    const h=()=>{const n=Date.now();if(ready&&n-lastFocRef.current>45000){lastFocRef.current=n;loadData(true)}};
+    const h=()=>{const n=Date.now();if(ready&&!saveRef.current&&n-lastFocRef.current>45000){lastFocRef.current=n;loadData(true)}};
     window.addEventListener('focus',h);return()=>window.removeEventListener('focus',h);
   },[loadData,ready]);
 
-  const upd=(setter,key)=>v=>{setter(v);schedSave({...dataRef.current,[key]:v})};
+  const upd=(setter,key)=>v=>{setter(v);schedSave()};
 
   // ── Données semaine ──
   const wk=getMon(monday).toISOString().slice(0,10);
