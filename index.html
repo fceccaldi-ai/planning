@@ -116,11 +116,29 @@ function makeICS(person,type,startH,endH,date){
     `DTSTART:${dt(date,startH)}`,`DTEND:${dt(date,endH)}`,
     `SUMMARY:📞 Remplacement phoning – ${typ}`,
     `DESCRIPTION:Tu remplaces ${person}.\\nHoraire : ${tFmt(startH)}–${tFmt(endH)}`,
-    'BEGIN:VALARM','TRIGGER:-PT5M','ACTION:DISPLAY',
-    'DESCRIPTION:📞 Phoning dans 5 minutes','END:VALARM',
+    'BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',
+    'DESCRIPTION:📞 Phoning dans 15 minutes','END:VALARM',
     'END:VEVENT','END:VCALENDAR'].join('\r\n');
 }
 const dlICS=(ics,name)=>{const a=document.createElement('a');a.href='data:text/calendar;charset=utf-8,'+encodeURIComponent(ics);a.download=name+'.ics';a.click()};
+
+// Ouvre Outlook Web avec un événement pré-rempli — plus fiable que ICS
+const openOutlookEvent=(person,type,startH,endH,date,repName,repEmail='')=>{
+  const pad=n=>String(n).padStart(2,'0');
+  const fmt=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const fmtT=(d,h)=>{
+    const r=new Date(d);r.setHours(Math.floor(h),Math.round((h%1)*60),0,0);
+    return`${fmt(r)}T${pad(r.getHours())}:${pad(r.getMinutes())}:00`;
+  };
+  const typ=type==='rappel'?'Rappels clients':'Opportunités';
+  const subject=encodeURIComponent(`📞 Remplacement phoning – ${typ}`);
+  const body=encodeURIComponent(`Tu remplaces ${person}.\nHoraire : ${tFmt(startH)}–${tFmt(endH)}\n\nRappel : 15 min avant`);
+  const start=encodeURIComponent(fmtT(date,startH));
+  const end=encodeURIComponent(fmtT(date,endH));
+  const to=repEmail?`&to=${encodeURIComponent(repEmail)}`:'';
+  const url=`https://outlook.office.com/calendar/0/deeplink/compose?subject=${subject}&startdt=${start}&enddt=${end}&body=${body}${to}&reminderMinutesBeforeStart=15`;
+  window.open(url,'_blank');
+};
 const makeTeamsMsg=(rep,person,dayIdx,startH,endH,type,date)=>{
   const typ=type==='rappel'?'Rappels clients':'Opportunités';
   return`@${rep} tu remplaces ${person} le ${DAYS[dayIdx]} ${fmtS(date)} de ${tFmt(startH)} à ${tFmt(endH)} (${typ}). Merci de confirmer ✅`;
@@ -343,16 +361,35 @@ function App(){
     const cc=cfg.get();if(!cc.binId)return;
     const mk=cc.masterKey||_k();
     setSyncSt('saving');
-    try{await jWrite(cc.binId,mk,data);setSyncSt('ok');setLastSync(new Date())}
-    catch{setSyncSt('error');toast_('❌ Sauvegarde échouée')}
+    try{
+      await jWrite(cc.binId,mk,data);
+      setSyncSt('ok');setLastSync(new Date());
+    }
+    catch{setSyncSt('error');toast_('❌ Sauvegarde échouée — réessayez')}
   },[toast_]);
+
+  // Bloque le refresh/fermeture si une sauvegarde est en cours
+  useEffect(()=>{
+    const h=e=>{
+      if(syncSt==='saving'){
+        e.preventDefault();
+        e.returnValue='Une sauvegarde est en cours. Quittez quand même ?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload',h);
+    return()=>window.removeEventListener('beforeunload',h);
+  },[syncSt]);
 
   const schedSave=useCallback(()=>{
     if(saveRef.current)clearTimeout(saveRef.current);
-    // Lit dataRef.current AU MOMENT de la sauvegarde (pas au moment de l'appel)
-    // → garantit que TOUS les états mis à jour sont inclus, même si plusieurs
-    //   mises à jour s'enchaînent rapidement (ex: absent + remplaçant)
     saveRef.current=setTimeout(()=>saveData(dataRef.current),1500);
+  },[saveData]);
+
+  // Sauvegarde immédiate — pour les actions critiques (absent, remplaçant)
+  const saveNow=useCallback((patch={})=>{
+    if(saveRef.current){clearTimeout(saveRef.current);saveRef.current=null;}
+    saveData({...dataRef.current,...patch});
   },[saveData]);
 
   useEffect(()=>{if(ready)loadData()},[ready]);
@@ -378,22 +415,41 @@ function App(){
   const toggleAbs=slot=>{
     if(!isAdmin)return;
     const key=`${slot.person}|${slot.day}`,was=wd.abs[key];
-    setWd(w=>{const abs={...w.abs},rep={...w.rep};
-      if(was){delete abs[key];schedule.filter(s=>s.person===slot.person&&s.day===slot.day).forEach(s=>delete rep[s.id])}
-      else abs[key]=true;return{...w,abs,rep}});
+    const newAbs={...wd.abs},newRep={...wd.rep};
+    if(was){delete newAbs[key];schedule.filter(s=>s.person===slot.person&&s.day===slot.day).forEach(s=>delete newRep[s.id])}
+    else newAbs[key]=true;
+    const newWd={...weekData,[wk]:{...wd,abs:newAbs,rep:newRep}};
+    setWeekData(newWd);
+    if(saveRef.current)clearTimeout(saveRef.current);
+    saveData({...dataRef.current,weekData:newWd});
     if(was)setModal(null);
   };
 
   // ── Remplacements session entière ──
-  const confirmRep=(slotId,cand)=>{
+  const confirmRep=async(slotId,cand)=>{
     if(!isAdmin)return;
     const sl=schedule.find(s=>s.id===slotId);
-    setWd(w=>({...w,rep:{...w.rep,[slotId]:cand}}));
+    const newWd={...weekData,[wk]:{...wd,rep:{...wd.rep,[slotId]:cand}}};
     const nr={...rotation,[sl.type]:{...(rotation[sl.type]||{}),[cand]:{count:(rotation[sl.type]?.[cand]?.count||0)+1,last:Date.now()}}};
-    upd(setRotation,'rotation')(nr);
-    toast_(`✓ ${cand} assigné·e pour remplacer ${sl.person}`);
+    setWeekData(newWd);
+    setRotation(nr);
+    if(saveRef.current){clearTimeout(saveRef.current);saveRef.current=null;}
+    const date=wDates[sl.day];
+    const repEmail=members.find(m=>m.name===cand)?.email||'';
+    // Teams @mention → presse-papiers
+    navigator.clipboard?.writeText(makeTeamsMsg(cand,sl.person,sl.day,sl.startH,sl.endH,sl.type,date));
+    // Outlook → ouvre formulaire événement pré-rempli
+    openOutlookEvent(sl.person,sl.type,sl.startH,sl.endH,date,cand,repEmail);
+    await saveData({...dataRef.current,weekData:newWd,rotation:nr});
+    toast_(`✅ ${cand} assigné·e · 📋 @mention copiée · 📅 Outlook ouvert`,4000);
   };
-  const removeRep=id=>setWd(w=>{const r={...w.rep};delete r[id];return{...w,rep:r}});
+  const removeRep=id=>{
+    const newWd={...weekData,[wk]:{...wd,rep:{...wd.rep}}};
+    delete newWd[wk].rep[id];
+    setWeekData(newWd);
+    if(saveRef.current)clearTimeout(saveRef.current);
+    saveData({...dataRef.current,weekData:newWd});
+  };
 
   // ── Pauses ponctuelles 20 min ──
   const addBreak=(slotId,brk)=>{
@@ -406,25 +462,26 @@ function App(){
     return{...w,breaks:{...(w.breaks||{}),[slotId]:cur}};
   });
 
-  // ── Éligibles (session entière) ──
+  // ── Éligibles — tous les membres, le gestionnaire décide ──
   const getElig=slot=>{
-    const pool=slot.type==='opport'?members.filter(m=>m.canOpport).map(m=>m.name):members.map(m=>m.name);
-    const af=Object.entries(wd.rep).filter(([id])=>schedule.find(s=>s.id===id)?.day===slot.day).map(([,p])=>p);
-    const cands=pool.filter(c=>{
-      if(c===slot.person||isAbs(c,slot.day)||af.includes(c))return false;
-      if(schedule.some(s=>s.person===c&&s.day===slot.day))return false;
-      return true;
-    });
     const rs=rotation[slot.type]||{};
-    return cands.sort((a,b)=>{const ca=rs[a]?.count||0,cb=rs[b]?.count||0;return ca!==cb?ca-cb:(rs[a]?.last||0)-(rs[b]?.last||0)});
+    const cur=wd.rep[slot.id];
+    return members.map(m=>m.name)
+      .filter(c=>c!==slot.person)
+      .sort((a,b)=>{
+        if(a===cur)return -1;if(b===cur)return 1;
+        const ca=rs[a]?.count||0,cb=rs[b]?.count||0;
+        return ca!==cb?ca-cb:(rs[a]?.last||0)-(rs[b]?.last||0);
+      });
   };
 
-  // ── Notification : @mention Teams uniquement ──
+  // ── Notification : @mention Teams + Outlook au clic ──
   const notif=(slot,repName,startH,endH)=>{
     const sh=startH??slot.startH,eh=endH??slot.endH,date=wDates[slot.day];
-    const msg=makeTeamsMsg(repName,slot.person,slot.day,sh,eh,slot.type,date);
-    navigator.clipboard?.writeText(msg);
-    toast_('📋 @mention Teams copiée — collez-la dans votre canal Teams',4000);
+    const repEmail=members.find(m=>m.name===repName)?.email||'';
+    navigator.clipboard?.writeText(makeTeamsMsg(repName,slot.person,slot.day,sh,eh,slot.type,date));
+    openOutlookEvent(slot.person,slot.type,sh,eh,date,repName,repEmail);
+    toast_('📋 @mention copiée · 📅 Outlook ouvert',3000);
   };
 
   // ── Gestion créneaux ──
@@ -471,10 +528,10 @@ function App(){
               {isAdmin?'✏️ ÉDITION':'🔒 LECTURE'}
             </span>
             <span style={{fontSize:'10px',color:syncColor,fontWeight:'500'}}>
-              {syncSt==='saving'&&<span className="pulse">● Sauvegarde…</span>}
+              {syncSt==='saving'&&<span className="pulse" style={{color:'#f59e0b',fontWeight:'700'}}>⏳ Sauvegarde… ne pas rafraîchir</span>}
               {syncSt==='loading'&&<span className="pulse">● Chargement…</span>}
-              {syncSt==='ok'&&lastSync&&<span>● Sync {String(lastSync.getHours()).padStart(2,'0')}h{String(lastSync.getMinutes()).padStart(2,'0')}</span>}
-              {syncSt==='error'&&<span>● Hors ligne</span>}
+              {syncSt==='ok'&&lastSync&&<span style={{color:'#22c55e'}}>✅ Sync {String(lastSync.getHours()).padStart(2,'0')}h{String(lastSync.getMinutes()).padStart(2,'0')}</span>}
+              {syncSt==='error'&&<span style={{color:'#ef4444'}}>● Hors ligne</span>}
             </span>
           </div>
           <div style={{fontSize:'10px',color:'#94a3b8',marginTop:'1px'}}>
@@ -692,7 +749,7 @@ function App(){
               <div>
                 <div style={{fontSize:'10px',fontWeight:'700',color:'#94a3b8',textTransform:'uppercase',letterSpacing:'.7px',marginBottom:'7px'}}>
                   {rep?'Modifier':'Choisir'} le remplaçant·e
-                  <span style={{fontSize:'9px',color:'#e2e8f0',fontWeight:'400',textTransform:'none',letterSpacing:0,marginLeft:'5px'}}>— rotation équitable · même jour exclu</span>
+                  <span style={{fontSize:'9px',color:'#e2e8f0',fontWeight:'400',textTransform:'none',letterSpacing:0,marginLeft:'5px'}}>— tous les membres disponibles</span>
                 </div>
                 <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
                   {elig.map((c,i)=>{const cnt=rotation[mSlot.type]?.[c]?.count||0,isCur=rep===c,isTop=i===0&&!isCur,cc=mCol(c);return(
@@ -717,7 +774,7 @@ function App(){
 
               {absent&&elig.length===0&&(
               <div style={{padding:'12px',background:'#fff5f5',border:'1px solid #fecaca',borderRadius:'8px',fontSize:'12px',color:'#dc2626',textAlign:'center'}}>
-                ⚠ Aucun·e remplaçant·e disponible pour ce créneau
+                ⚠ Aucun autre membre dans l'équipe
               </div>)}
 
               {/* ── PAUSES PONCTUELLES 20 MIN ── */}
