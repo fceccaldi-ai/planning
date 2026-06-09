@@ -384,7 +384,7 @@ function App(){
   },[saveData]);
 
   useEffect(()=>{if(ready)loadData()},[ready]);
-  useEffect(()=>{const id=setInterval(()=>{if(!isAdmin&&!saveRef.current)loadData(true)},900000);return()=>clearInterval(id)},[isAdmin,loadData]);
+  useEffect(()=>{const id=setInterval(()=>{if(!saveRef.current)loadData(true)},30000);return()=>clearInterval(id)},[loadData]);
   const lastFocRef=useRef(0);
   useEffect(()=>{
     const h=()=>{const n=Date.now();if(ready&&!saveRef.current&&n-lastFocRef.current>45000){lastFocRef.current=n;loadData(true)}};
@@ -825,5 +825,4 @@ function App(){
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
-</html>
 </html>
