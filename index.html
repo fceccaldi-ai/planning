@@ -145,22 +145,22 @@ const makeTeamsMsg=(rep,person,dayIdx,startH,endH,type,date)=>{
 };
 
 // ══ CONFIG FIXE ════════════════════════════════════════════════════════════════
-const FIXED_BIN_ID='6a01d894c0954111d8094edb';
+const WORKER_URL='https://planning-api.ceccaldi-florent.workers.dev';
+const WRITE_TOKEN='LinXeaWorker2025';
 const TEAM_PWD_HASH='95aacffba754cebe1c37a0cf3765bde826dedc8bfd5cf3245200c1127d7c1536';
 const ADMIN_PIN_HASH='09550794019a7c2092e5872e26a4cd2155868b8c427adb53734c8a9d4ea343d7';
 const sha256=async s=>{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')};
-// Clé d'accès (encodée)
-const _k=()=>atob('JDJhJDEwJEpwMDc0VWZhSEFGbn'+'d4UVJoVUlOZ09XSkV1MXBMU2VBc'+'jd4bUNReDRMM3ZZanl4OGtkQVZp');
 
-// ══ JSONBIN ════════════════════════════════════════════════════════════════════
-const B='https://api.jsonbin.io/v3/b';
-const jRead=async(id,k)=>{
-  const h={};if(k)h['X-Master-Key']=k;
-  const r=await fetch(`${B}/${id}/latest`,{headers:h});
+// ══ CLOUDFLARE WORKER API ══════════════════════════════════════════════════════
+const jRead=async()=>{
+  const r=await fetch(WORKER_URL);
   if(!r.ok)throw new Error(`Erreur ${r.status}`);
-  return(await r.json()).record
+  return r.json();
 };
-const jWrite=async(id,k,data)=>{const r=await fetch(`${B}/${id}`,{method:'PUT',headers:{'Content-Type':'application/json','X-Master-Key':k},body:JSON.stringify(data)});if(!r.ok)throw new Error('Sauvegarde échouée')};
+const jWrite=async(data)=>{
+  const r=await fetch(WORKER_URL,{method:'PUT',headers:{'Content-Type':'application/json','X-Write-Token':WRITE_TOKEN},body:JSON.stringify(data)});
+  if(!r.ok)throw new Error('Sauvegarde échouée');
+};
 const cfg={get:()=>{try{return JSON.parse(localStorage.getItem('ph-cfg')||'{}')}catch{return{}}},set:v=>{try{localStorage.setItem('ph-cfg',JSON.stringify(v))}catch{}}};
 
 // ══ COMPOSANT : Formulaire créneau ═════════════════════════════════════════════
@@ -286,7 +286,6 @@ function PinModal({onClose,onSuccess}){
     setBusy(true);setErr('');
     const h=await sha256(pin);
     if(h===ADMIN_PIN_HASH){
-      cfg.set({...cfg.get(),masterKey:_k()});
       onSuccess();
     }else{
       setErr('Code PIN incorrect');
@@ -309,12 +308,8 @@ function PinModal({onClose,onSuccess}){
 
 // ══ APP PRINCIPALE ═════════════════════════════════════════════════════════════
 function App(){
-  // Auto-configure le Bin ID fixe au premier lancement
-  const c=cfg.get();
-  if(!c.binId||c.binId!==FIXED_BIN_ID){cfg.set({...c,binId:FIXED_BIN_ID});}
-
-  const[locked,    setLocked]   =useState(!sessionStorage.getItem('ph-auth'));
-  const[ready,    setReady]   =useState(true); // toujours prêt : Bin ID fixe
+  const[locked,setLocked]=useState(!sessionStorage.getItem('ph-auth'));
+  const[ready,setReady]=useState(true);
   const[members,  setMembers] =useState(DEF_MEMBERS);
   const[schedule, setSched]   =useState(DEF_SCHED);
   const[weekData, setWeekData]=useState({});
@@ -344,11 +339,9 @@ function App(){
 
   // ── Sync JSONbin ──
   const loadData=useCallback(async(silent=false)=>{
-    const cc=cfg.get();if(!cc.binId)return;
     if(!silent)setSyncSt('loading');
     try{
-      const mk=cc.masterKey||_k();
-      const d=await jRead(cc.binId,mk);
+      const d=await jRead();
       if(d.members)  setMembers(d.members);
       if(d.schedule) setSched(d.schedule);
       if(d.weekData) setWeekData(d.weekData);
@@ -358,11 +351,9 @@ function App(){
   },[toast_]);
 
   const saveData=useCallback(async data=>{
-    const cc=cfg.get();if(!cc.binId)return;
-    const mk=cc.masterKey||_k();
     setSyncSt('saving');
     try{
-      await jWrite(cc.binId,mk,data);
+      await jWrite(data);
       setSyncSt('ok');setLastSync(new Date());
     }
     catch{setSyncSt('error');toast_('❌ Sauvegarde échouée — réessayez')}
@@ -393,7 +384,7 @@ function App(){
   },[saveData]);
 
   useEffect(()=>{if(ready)loadData()},[ready]);
-  useEffect(()=>{const id=setInterval(()=>{if(!isAdmin&&!saveRef.current)loadData(true)},120000);return()=>clearInterval(id)},[isAdmin,loadData]);
+  useEffect(()=>{const id=setInterval(()=>{if(!isAdmin&&!saveRef.current)loadData(true)},900000);return()=>clearInterval(id)},[isAdmin,loadData]);
   const lastFocRef=useRef(0);
   useEffect(()=>{
     const h=()=>{const n=Date.now();if(ready&&!saveRef.current&&n-lastFocRef.current>45000){lastFocRef.current=n;loadData(true)}};
@@ -834,4 +825,5 @@ function App(){
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
+</html>
 </html>
